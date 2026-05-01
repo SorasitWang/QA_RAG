@@ -287,6 +287,36 @@
       padding: 0.3rem 0.75rem;
       text-transform: uppercase;
     }
+    .compact-banner {
+      align-items: center;
+      background: #451a03;
+      border-bottom: 1px solid #92400e;
+      color: #fcd34d;
+      cursor: pointer;
+      display: flex;
+      font-size: 0.72rem;
+      font-weight: 600;
+      gap: 0.4rem;
+      padding: 0.3rem 0.75rem;
+      user-select: none;
+    }
+    .compact-banner .chevron {
+      margin-left: auto;
+      transition: transform 0.2s;
+    }
+    .compact-banner.open .chevron { transform: rotate(180deg); }
+    .compact-summary {
+      background: #1c0a00;
+      border-bottom: 1px solid #92400e;
+      color: #fde68a;
+      display: none;
+      font-size: 0.76rem;
+      line-height: 1.5;
+      padding: 0.5rem 0.75rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .compact-summary.open { display: block; }
     .turn-section { border-top: 1px solid var(--border); }
     .turn-section:first-child { border-top: none; }
     .section-label {
@@ -695,10 +725,24 @@
           <div class="section-content">${escHtml(log.assistant)}</div>
         </div>`);
 
+      const compactBanner = log.compacted ? `
+        <div class="compact-banner" onclick="this.classList.toggle('open');this.nextElementSibling.classList.toggle('open')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          History compacted before this turn
+          <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </div>
+        <div class="compact-summary">${escHtml(log.compactedSummary || '')}</div>` : '';
+
       const card = document.createElement('div');
       card.className = 'turn-card';
       card.innerHTML = `
         <div class="turn-heading">Turn ${turnCount}</div>
+        ${compactBanner}
         ${sections.join('')}`;
 
       promptBody.appendChild(card);

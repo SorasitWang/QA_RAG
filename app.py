@@ -163,6 +163,8 @@ def chatEndpoint():
             "system":    controller.systemMessage,
             "user":      controller.generateQAPrompt(retrieved.documents, query),
             "assistant": reply,
+            "compacted":        controller.lastCompacted,
+            "compactedSummary": controller.lastCompactedSummary,
         },
     }
     if rewrittenQuery:

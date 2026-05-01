@@ -19,15 +19,15 @@ pip install -r requirements.txt
 
 ```bash
 # 1. Index your documents (run once, or whenever new files are added)
-python updateData.py
+python -m scripts.updateData
 
 # 2a. Start the web app
-python app.py          # http://localhost:5000
+python app.py                    # http://localhost:5000
 
 # 2b. Or use a CLI tool
-python simpleQA.py     # RAG-augmented chat
-python simpleSearch.py # Search-only viewer
-python simpleChat.py   # Plain chat (no RAG)
+python -m scripts.simpleQA       # RAG-augmented chat
+python -m scripts.simpleSearch   # Search-only viewer
+python -m scripts.simpleChat     # Plain chat (no RAG)
 ```
 
 ---
@@ -41,7 +41,7 @@ Indexes raw text files from `Test/RawTextFiles/` into both the ChromaDB vector s
 **Run:** once before starting the app, and again whenever new source files are added.
 
 ```bash
-python updateData.py
+python -m scripts.updateData
 ```
 
 **What it does:**
@@ -57,10 +57,11 @@ python updateData.py
 
 Two-panel browser UI: left panel is a RAG chat interface; right panel shows retrieved document chunks and scores for debugging.
 
+![RAG Chat UI](docs/ui_web.png)
+
 **Run:**
 ```bash
-python app.py
-# Open http://localhost:5000
+python app.py  # Open http://localhost:5000
 ```
 
 **API endpoints:**
@@ -90,7 +91,7 @@ Interactive terminal bot that retrieves relevant document chunks for every query
 
 **Run:**
 ```bash
-python simpleQA.py
+python -m scripts.simpleQA
 ```
 
 **Commands:**
@@ -111,7 +112,7 @@ Inspect raw retrieval results without involving the LLM. Shows relevance scores,
 
 **Run:**
 ```bash
-python simpleSearch.py
+python -m scripts.simpleSearch
 ```
 
 **Commands:**
@@ -130,7 +131,7 @@ Minimal chatbot that talks directly to the LLM without any document retrieval. U
 
 **Run:**
 ```bash
-python simpleChat.py
+python -m scripts.simpleChat
 ```
 
 ---

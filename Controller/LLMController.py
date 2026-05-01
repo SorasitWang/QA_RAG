@@ -30,6 +30,9 @@ class LLMController:
         # We store the plain query (not the augmented prompt) so history stays
         # concise and previous RAG data blocks don't repeat on every turn.
         self.exchanges: list[tuple[str, str, list[str], list[float]]] = []
+        # Set to True on turns where _compactHistory() fires; reset each turn.
+        self.lastCompacted: bool = False
+        self.lastCompactedSummary: str | None = None
 
     def generateQAPrompt(self, retrievedData: list[str], userQuery: str) -> str:
         """
@@ -70,6 +73,8 @@ class LLMController:
         summary = chat([ChatMessage(userMessage=summaryPrompt)])
         # Reset to a single placeholder exchange carrying the summary as the reply
         self.exchanges = [("Summary of previous conversation:", summary, [], [])]
+        self.lastCompacted = True
+        self.lastCompactedSummary = summary
 
     def _buildChatMessages(self, currentUserMsg: str) -> list[ChatMessage]:
         """
@@ -130,6 +135,8 @@ class LLMController:
         and records the exchange (with raw query, not the augmented prompt, so
         history stays compact across turns).
         """
+        self.lastCompacted = False
+        self.lastCompactedSummary = None
         if self._historyLength() > Config.Model.MaxChatHistoryChars:
             self._compactHistory()
 
