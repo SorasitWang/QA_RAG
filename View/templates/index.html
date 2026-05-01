@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAG Chat</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f1117;
+      --surface:   #1a1d27;
+      --surface2:  #22263a;
+      --border:    #2a2d3e;
+      --text:      #e2e8f0;
+      --muted:     #8892a4;
+      --accent:    #6366f1;
+      --accent2:   #818cf8;
+      --user-bg:   #312e81;
+      --green:     #22c55e;
+      --yellow:    #eab308;
+      --red:       #ef4444;
+      --topbar-h:  52px;
+    }
+
+    html, body { height: 100%; overflow: hidden; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Top bar ─────────────────────────────────────────────── */
+    .topbar {
+      align-items: center;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-shrink: 0;
+      gap: 1.25rem;
+      height: var(--topbar-h);
+      padding: 0 1.25rem;
+    }
+
+    .topbar-title {
+      color: var(--accent2);
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      margin-right: auto;
+    }
+
+    /* Mode tabs */
+    .mode-group {
+      display: flex;
+      gap: 2px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 3px;
+    }
+    .mode-group input[type="radio"] { display: none; }
+    .mode-group label {
+      border-radius: 5px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 500;
+      padding: 4px 10px;
+      transition: background 0.15s, color 0.15s;
+      user-select: none;
+    }
+    .mode-group input[type="radio"]:checked + label {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    /* TopK */
+    .topk-wrap {
+      align-items: center;
+      color: var(--muted);
+      display: flex;
+      font-size: 0.8rem;
+      gap: 6px;
+    }
+    #topKInput {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.82rem;
+      padding: 4px 6px;
+      text-align: center;
+      width: 44px;
+      outline: none;
+    }
+    #topKInput:focus { border-color: var(--accent); }
+
+    /* ── Main panels ─────────────────────────────────────────── */
+    .panels {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+
+    /* ── LEFT — Chat ─────────────────────────────────────────── */
+    .chat-panel {
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      min-width: 0;
+    }
+
+    .chat-header {
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-shrink: 0;
+      gap: 0.5rem;
+      padding: 0.55rem 1rem;
+    }
+    .chat-header span {
+      color: var(--muted);
+      flex: 1;
+      font-size: 0.78rem;
+    }
+
+    .clear-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.75rem;
+      padding: 3px 10px;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .clear-btn:hover { border-color: var(--accent); color: var(--accent2); }
+
+    /* Messages */
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem;
+      scroll-behavior: smooth;
+    }
+
+    .msg-wrap {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.9rem;
+    }
+    .msg-wrap.user  { flex-direction: row-reverse; }
+
+    .avatar {
+      align-items: center;
+      border-radius: 50%;
+      display: flex;
+      flex-shrink: 0;
+      font-size: 0.7rem;
+      font-weight: 700;
+      height: 28px;
+      justify-content: center;
+      width: 28px;
+    }
+    .avatar.user-av { background: var(--accent); color: #fff; }
+    .avatar.bot-av  { background: var(--surface2); color: var(--accent2); }
+
+    .bubble {
+      border-radius: 12px;
+      font-size: 0.88rem;
+      line-height: 1.65;
+      max-width: 78%;
+      padding: 0.6rem 0.9rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .bubble.user { background: var(--user-bg); border-bottom-right-radius: 3px; }
+    .bubble.bot  { background: var(--surface2); border-bottom-left-radius: 3px; }
+
+    /* Typing dots */
+    .typing-dots span {
+      animation: blink 1.2s infinite;
+      display: inline-block;
+      font-size: 1.1rem;
+    }
+    .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink { 0%,80%,100% { opacity: 0.2; } 40% { opacity: 1; } }
+
+    /* Chat input */
+    .chat-input-wrap {
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-shrink: 0;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+    }
+    #chatInput {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      flex: 1;
+      font-size: 0.9rem;
+      outline: none;
+      padding: 0.6rem 0.9rem;
+      resize: none;
+      transition: border-color 0.15s;
+    }
+    #chatInput:focus { border-color: var(--accent); }
+    #chatInput::placeholder { color: var(--muted); }
+
+    .send-btn {
+      align-items: center;
+      background: var(--accent);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      cursor: pointer;
+      display: flex;
+      font-size: 0.9rem;
+      justify-content: center;
+      padding: 0 1.1rem;
+      transition: background 0.15s, opacity 0.15s;
+    }
+    .send-btn:hover   { background: var(--accent2); }
+    .send-btn:active  { opacity: 0.8; }
+    .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── MIDDLE — Debug ──────────────────────────────────────── */
+    .debug-panel {
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      min-height: 0;
+      width: 420px;
+    }
+
+    /* ── RIGHT — Prompt Inspector ────────────────────────────── */
+    .prompt-panel {
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      min-height: 0;
+      overflow: hidden;
+      transition: width 0.22s ease;
+      width: 0;
+    }
+    .prompt-panel.open { width: 360px; }
+
+    .prompt-header {
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      padding: 0.55rem 1rem;
+    }
+    .prompt-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem;
+    }
+
+    /* Turn cards */
+    .turn-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.78rem;
+      margin-bottom: 0.75rem;
+      overflow: hidden;
+    }
+    .turn-heading {
+      align-items: center;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      display: flex;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      padding: 0.3rem 0.75rem;
+      text-transform: uppercase;
+    }
+    .turn-section { border-top: 1px solid var(--border); }
+    .turn-section:first-child { border-top: none; }
+    .section-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 0.35rem 0.75rem 0;
+      text-transform: uppercase;
+    }
+    .section-content {
+      color: var(--text);
+      line-height: 1.5;
+      max-height: 160px;
+      overflow-y: auto;
+      padding: 0.2rem 0.75rem 0.5rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* Toggle button */
+    .icon-btn {
+      align-items: center;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--muted);
+      cursor: pointer;
+      display: flex;
+      padding: 4px 8px;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .icon-btn:hover, .icon-btn.active {
+      border-color: var(--accent);
+      color: var(--accent2);
+    }
+
+    .debug-header {
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      padding: 0.55rem 1rem;
+    }
+    .debug-title {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .debug-meta {
+      color: var(--muted);
+      font-size: 0.72rem;
+      margin-top: 2px;
+    }
+    .debug-meta strong { color: var(--text); }
+
+    .debug-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem;
+    }
+
+    /* Result cards */
+    .result-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 0.6rem;
+      overflow: hidden;
+    }
+    .card-header {
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 0.6rem;
+      padding: 0.5rem 0.75rem;
+    }
+    .rank-badge {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-weight: 700;
+      min-width: 1.8rem;
+      padding: 2px 4px;
+      text-align: center;
+    }
+    .score-group {
+      align-items: center;
+      display: flex;
+      flex-shrink: 0;
+      gap: 0.4rem;
+    }
+    .score-value {
+      font-size: 0.82rem;
+      font-weight: 700;
+      min-width: 2.8rem;
+    }
+    .bar-track {
+      background: var(--bg);
+      border-radius: 99px;
+      height: 5px;
+      overflow: hidden;
+      width: 60px;
+    }
+    .bar-fill {
+      border-radius: 99px;
+      height: 100%;
+      transition: width 0.35s ease;
+    }
+    .file-name {
+      color: var(--muted);
+      flex: 1;
+      font-size: 0.76rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .card-content {
+      color: var(--text);
+      font-size: 0.8rem;
+      line-height: 1.55;
+      padding: 0.6rem 0.75rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* Sub-scores row (hybrid mode) */
+    .card-header { flex-wrap: wrap; }
+    .score-breakdown {
+      align-items: center;
+      display: flex;
+      flex-basis: 100%;
+      font-size: 0.72rem;
+      gap: 0.35rem;
+      padding-left: calc(1.8rem + 0.6rem); /* align under score group */
+    }
+    .sub-label {
+      color: var(--muted);
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .sub-sep { color: var(--border); }
+
+    /* Empty / placeholder */
+    .debug-placeholder {
+      align-items: center;
+      color: var(--muted);
+      display: flex;
+      flex-direction: column;
+      font-size: 0.85rem;
+      gap: 0.5rem;
+      height: 100%;
+      justify-content: center;
+    }
+    .debug-placeholder svg { opacity: 0.3; }
+  </style>
+</head>
+<body>
+
+  <!-- Top bar: title + shared controls -->
+  <div class="topbar">
+    <div class="topbar-title">🧠 RAG Chat</div>
+
+    <div class="mode-group">
+      <input type="radio" name="mode" id="modeVector" value="vector" checked />
+      <label for="modeVector">Vector</label>
+      <input type="radio" name="mode" id="modeSparse" value="sparse" />
+      <label for="modeSparse">Sparse</label>
+      <input type="radio" name="mode" id="modeHybrid" value="hybrid" />
+      <label for="modeHybrid">Hybrid</label>
+    </div>
+
+    <div class="topk-wrap">
+      <span>Top-K</span>
+      <input id="topKInput" type="number" value="5" min="1" max="50" />
+    </div>
+
+    <button class="icon-btn" id="promptToggle" title="Toggle prompt inspector">
+      <!-- Terminal / prompt icon -->
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Two-panel layout -->
+  <div class="panels">
+
+    <!-- ── LEFT: Chat ── -->
+    <div class="chat-panel">
+      <div class="chat-header">
+        <span id="chatStatus">Start a conversation…</span>
+        <button class="clear-btn" id="clearBtn">New chat</button>
+      </div>
+
+      <div class="messages" id="messages">
+        <!-- Bubbles injected by JS -->
+      </div>
+
+      <div class="chat-input-wrap">
+        <textarea
+          id="chatInput"
+          rows="1"
+          placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"
+        ></textarea>
+        <button class="send-btn" id="sendBtn" title="Send">
+          <!-- Send arrow icon -->
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ── RIGHT: Debug ── -->
+    <div class="debug-panel">
+      <div class="debug-header">
+        <div class="debug-title">Retrieved Documents</div>
+        <div class="debug-meta" id="debugMeta">Send a message to see results.</div>
+      </div>
+      <div class="debug-body" id="debugBody">
+        <div class="debug-placeholder">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <span>Retrieval results appear here</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── RIGHT: Prompt Inspector ── -->
+    <div class="prompt-panel" id="promptPanel">
+      <div class="prompt-header">
+        <div class="debug-title">Prompt Inspector</div>
+        <div class="debug-meta" id="promptMeta">Send a message to inspect prompts.</div>
+      </div>
+      <div class="prompt-body" id="promptBody">
+        <!-- Turn cards injected by JS -->
+      </div>
+    </div>
+
+  </div><!-- .panels -->
+
+  <script>
+    // ── Session ID (per page load) ──────────────────────────────
+    const sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+    // ── DOM refs ────────────────────────────────────────────────
+    const messagesEl    = document.getElementById('messages');
+    const chatInput     = document.getElementById('chatInput');
+    const sendBtn       = document.getElementById('sendBtn');
+    const clearBtn      = document.getElementById('clearBtn');
+    const debugBody     = document.getElementById('debugBody');
+    const debugMeta     = document.getElementById('debugMeta');
+    const chatStatus    = document.getElementById('chatStatus');
+    const topKInput     = document.getElementById('topKInput');
+    const promptPanel   = document.getElementById('promptPanel');
+    const promptBody    = document.getElementById('promptBody');
+    const promptMeta    = document.getElementById('promptMeta');
+    const promptToggle  = document.getElementById('promptToggle');
+
+    // ── Prompt inspector state ───────────────────────────────────
+    let turnCount = 0;
+
+    promptToggle.addEventListener('click', () => {
+      promptPanel.classList.toggle('open');
+      promptToggle.classList.toggle('active');
+    });
+
+    // ── Helpers ─────────────────────────────────────────────────
+    function getMode() {
+      return document.querySelector('input[name="mode"]:checked').value;
+    }
+
+    function escHtml(s) {
+      return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function scoreColor(sim) {
+      if (sim >= 0.70) return 'var(--green)';
+      if (sim >= 0.40) return 'var(--yellow)';
+      return 'var(--red)';
+    }
+
+    function scrollToBottom() {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    // ── Chat bubble builders ─────────────────────────────────────
+    function addUserBubble(text) {
+      const wrap = document.createElement('div');
+      wrap.className = 'msg-wrap user';
+      wrap.innerHTML = `
+        <div class="avatar user-av">You</div>
+        <div class="bubble user">${escHtml(text)}</div>`;
+      messagesEl.appendChild(wrap);
+      scrollToBottom();
+    }
+
+    function addBotBubble() {
+      const wrap = document.createElement('div');
+      wrap.className = 'msg-wrap bot';
+      wrap.innerHTML = `
+        <div class="avatar bot-av">AI</div>
+        <div class="bubble bot">
+          <span class="typing-dots"><span>•</span><span>•</span><span>•</span></span>
+        </div>`;
+      messagesEl.appendChild(wrap);
+      scrollToBottom();
+      // Return reference to the bubble so caller can update it
+      return wrap.querySelector('.bubble.bot');
+    }
+
+    function fillBotBubble(bubble, text) {
+      bubble.textContent = text;
+      scrollToBottom();
+    }
+
+    // ── Debug panel ──────────────────────────────────────────────
+    function renderDebug(query, mode, results, rewrittenQuery) {
+      const count = results.length;
+      const queryLabel = rewrittenQuery
+        ? `<strong>${escHtml(query)}</strong> → <em style="color:var(--accent2)">${escHtml(rewrittenQuery)}</em>`
+        : `<strong>${escHtml(query)}</strong>`;
+      debugMeta.innerHTML =
+        `${queryLabel} · ${mode} · ${count} chunk${count !== 1 ? 's' : ''}`;
+
+      if (count === 0) {
+        debugBody.innerHTML = `
+          <div class="debug-placeholder">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <span>No chunks passed the similarity threshold.</span>
+          </div>`;
+        return;
+      }
+
+      debugBody.innerHTML = results.map(r => {
+        const c   = scoreColor(r.score);
+        const pct = (r.score * 100).toFixed(1);
+
+        let subScores = '';
+        if (r.vectorScore !== undefined) {
+          const vc = scoreColor(r.vectorScore ?? 0);
+          const tc = scoreColor(r.tfidfScore  ?? 0);
+          const vLabel = r.vectorScore !== null ? `<span style="color:${vc}">${r.vectorScore.toFixed(3)}</span>` : '<span style="color:var(--muted)">—</span>';
+          const tLabel = r.tfidfScore  !== null ? `<span style="color:${tc}">${r.tfidfScore.toFixed(3)}</span>`  : '<span style="color:var(--muted)">—</span>';
+          subScores = `
+            <div class="score-breakdown">
+              <span class="sub-label">Dense</span>${vLabel}
+              <span class="sub-sep">·</span>
+              <span class="sub-label">Sparse</span>${tLabel}
+            </div>`;
+        }
+
+        return `
+          <div class="result-card">
+            <div class="card-header">
+              <div class="rank-badge">#${r.rank}</div>
+              <div class="score-group">
+                <span class="score-value" style="color:${c}">${r.score.toFixed(3)}</span>
+                <div class="bar-track">
+                  <div class="bar-fill" style="width:${pct}%;background:${c}"></div>
+                </div>
+              </div>
+              <div class="file-name">${escHtml(r.title)}</div>
+              ${subScores}
+            </div>
+            <div class="card-content">${escHtml(r.content)}</div>
+          </div>`;
+      }).join('');
+
+      debugBody.scrollTop = 0;
+    }
+
+    // ── Prompt inspector renderer ────────────────────────────────
+    function renderPromptTurn(log) {
+      turnCount++;
+      promptMeta.innerHTML = `<strong>${turnCount}</strong> turn${turnCount !== 1 ? 's' : ''} logged`;
+
+      const sections = [];
+
+      if (log.system) {
+        sections.push(`
+          <div class="turn-section">
+            <div class="section-label" style="color:var(--muted)">System</div>
+            <div class="section-content">${escHtml(log.system)}</div>
+          </div>`);
+      }
+
+      sections.push(`
+        <div class="turn-section">
+          <div class="section-label" style="color:var(--accent2)">User</div>
+          <div class="section-content">${escHtml(log.user)}</div>
+        </div>`);
+
+      sections.push(`
+        <div class="turn-section">
+          <div class="section-label" style="color:var(--green)">Assistant</div>
+          <div class="section-content">${escHtml(log.assistant)}</div>
+        </div>`);
+
+      const card = document.createElement('div');
+      card.className = 'turn-card';
+      card.innerHTML = `
+        <div class="turn-heading">Turn ${turnCount}</div>
+        ${sections.join('')}`;
+
+      promptBody.appendChild(card);
+      promptBody.scrollTop = promptBody.scrollHeight;
+    }
+
+    // ── Send message ─────────────────────────────────────────────
+    async function sendMessage() {
+      const query = chatInput.value.trim();
+      if (!query) return;
+
+      const mode = getMode();
+      const topK = parseInt(topKInput.value, 10) || 5;
+
+      // Lock UI
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+      sendBtn.disabled = true;
+
+      addUserBubble(query);
+      const botBubble = addBotBubble();
+      chatStatus.textContent = 'Retrieving and generating…';
+
+      try {
+        const res  = await fetch('/api/chat', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ query, mode, topK, sessionId }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          fillBotBubble(botBubble, '⚠️ ' + (data.error || res.statusText));
+          return;
+        }
+
+        fillBotBubble(botBubble, data.reply);
+        renderDebug(data.query, data.mode, data.results, data.rewrittenQuery);
+        if (data.promptLog) renderPromptTurn(data.promptLog);
+        chatStatus.textContent = `${data.results.length} chunk${data.results.length !== 1 ? 's' : ''} retrieved`;
+      } catch (err) {
+        fillBotBubble(botBubble, '⚠️ Request failed: ' + err.message);
+        chatStatus.textContent = 'Error';
+      } finally {
+        sendBtn.disabled = false;
+        chatInput.focus();
+      }
+    }
+
+    // ── Clear / new chat ─────────────────────────────────────────
+    clearBtn.addEventListener('click', async () => {
+      await fetch('/api/chat/reset', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ sessionId }),
+      });
+      messagesEl.innerHTML = '';
+      promptBody.innerHTML = '';
+      promptMeta.textContent = 'Send a message to inspect prompts.';
+      turnCount = 0;
+      debugBody.innerHTML = `
+        <div class="debug-placeholder">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <span>Retrieval results appear here</span>
+        </div>`;
+      debugMeta.textContent = 'Send a message to see results.';
+      chatStatus.textContent = 'Start a conversation…';
+    });
+
+    // ── Input: auto-resize + Enter to send ───────────────────────
+    chatInput.addEventListener('input', () => {
+      chatInput.style.height = 'auto';
+      chatInput.style.height = Math.min(chatInput.scrollHeight, 140) + 'px';
+    });
+
+    chatInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    sendBtn.addEventListener('click', sendMessage);
+    chatInput.focus();
+  </script>
+</body>
+</html>
