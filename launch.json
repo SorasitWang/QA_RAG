@@ -8,7 +8,7 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "cwd": "${fileDirname}",
-            "env": {"PYTHONPATH": "C:\\Users\\sorasit\\work\\NLP\\RAG"}
+            "env": {"PYTHONPATH": "${workspaceFolder}"}
         }
     ]
 }
