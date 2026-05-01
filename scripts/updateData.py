@@ -14,7 +14,6 @@ Pipeline:
 ###########################
 # Standard library imports
 ###########################
-
 from sentence_transformers import SentenceTransformer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import chromadb

@@ -141,8 +141,8 @@ def main():
             continue
 
         searchResult           = ragService.query(userInput, topK=5, searchMode=searchMode)
-        chunks: list[str]      = searchResult["documents"][0]
-        distances: list[float] = searchResult["distances"][0]
+        chunks: list[str]      = searchResult.documents
+        distances: list[float] = searchResult.distances
 
         reply = controller.generateResponse(userInput, chunks, distances)
         print(f"\n{Bold}{Magenta}Bot:{Reset} {reply}\n")

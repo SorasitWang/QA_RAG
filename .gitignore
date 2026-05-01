@@ -14,4 +14,8 @@ __pypackages__/
 # Environments
 .env
 
+# VS Code — track shared debug config, ignore personal settings
+.vscode/*
+!.vscode/launch.json
+
 .claude/*

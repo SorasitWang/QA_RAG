@@ -18,6 +18,7 @@ from Config import Config
 from DatabaseRepository.TfidfRepository import TfidfRepository
 from DatabaseRepository.VectorRepository import VectorRepository
 from DatabaseService.RagService import RagService
+from Dto.RetrievalResult import RetrievalResult
 
 # ANSI colours
 Reset  = "\033[0m"
@@ -50,11 +51,11 @@ def _toSimilarity(dist: float, mode: str) -> float:
     return max(0.0, 1.0 - dist)
 
 
-def _printResults(result: dict, mode: str, query: str) -> None:
-    ids       = result["ids"][0]
-    docs      = result["documents"][0]
-    distances = result["distances"][0]
-    metadatas = result["metadatas"][0]
+def _printResults(result: RetrievalResult, mode: str, query: str) -> None:
+    ids       = result.ids
+    docs      = result.documents
+    distances = result.distances
+    metadatas = result.metadatas
 
     width = 72
     print(f"\n{Bold}{Yellow}{'━' * width}{Reset}")
