@@ -40,7 +40,6 @@ class Config:
         SimilarityThreshold = 0.75
 
         # --- Category tagging ---
-        from Categories import CATEGORY_LABELS as CategoryLabels
         TagTopN: int = 4
 
         # --- Text cleaning ---
