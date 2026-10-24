@@ -24,9 +24,9 @@ class TestFetchDataFromFolder(unittest.TestCase):
 
     @patch('os.listdir', return_value=['doc.txt'])
     @patch('builtins.open', mock_open(read_data="data"))
-    def test_source_type_is_text(self, mock_listdir):
+    def test_source_type_is_file(self, mock_listdir):
         result = fetchDataFromFolder('/folder')
-        self.assertEqual(result[0].type, 'text')
+        self.assertEqual(result[0].sourceType, 'file')
 
     @patch('os.listdir', return_value=['doc.txt'])
     @patch('builtins.open', mock_open(read_data="data"))

@@ -78,6 +78,29 @@
       color: #fff;
     }
 
+    /* Source-type filter chips */
+    .source-group {
+      display: flex;
+      gap: 4px;
+    }
+    .source-group input[type="checkbox"] { display: none; }
+    .source-group label {
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.74rem;
+      opacity: 0.55;
+      padding: 3px 9px;
+      transition: opacity 0.15s, border-color 0.15s;
+      user-select: none;
+    }
+    .source-group input[type="checkbox"]:checked + label {
+      border-color: var(--accent);
+      color: var(--text);
+      opacity: 1;
+    }
+
     /* TopK */
     .topk-wrap {
       align-items: center;
@@ -435,6 +458,25 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .file-name a { color: var(--accent2); text-decoration: none; }
+    .file-name a:hover { text-decoration: underline; }
+    .source-badge {
+      border-radius: 4px;
+      flex-shrink: 0;
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 2px 6px;
+      text-transform: uppercase;
+    }
+    .source-badge.file { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+    .source-badge.news { background: rgba(59, 130, 246, 0.15);  color: #60a5fa; }
+    .source-badge.blog { background: rgba(168, 85, 247, 0.15);  color: #c084fc; }
+    .source-badge.sns  { background: rgba(34, 197, 94, 0.15);   color: #4ade80; }
+    .published-at {
+      color: var(--muted);
+      flex-shrink: 0;
+      font-size: 0.7rem;
+    }
     .card-content {
       color: var(--text);
       font-size: 0.8rem;
@@ -489,6 +531,19 @@
       <label for="modeSparse">Sparse</label>
       <input type="radio" name="mode" id="modeHybrid" value="hybrid" />
       <label for="modeHybrid">Hybrid</label>
+      <input type="radio" name="mode" id="modeGraph" value="graph" />
+      <label for="modeGraph">Graph</label>
+    </div>
+
+    <div class="source-group" title="Which kinds of sources to search">
+      <input type="checkbox" name="sourceType" id="srcFile" value="file" checked />
+      <label for="srcFile">📄 Files</label>
+      <input type="checkbox" name="sourceType" id="srcNews" value="news" checked />
+      <label for="srcNews">📰 News</label>
+      <input type="checkbox" name="sourceType" id="srcBlog" value="blog" checked />
+      <label for="srcBlog">✍️ Blogs</label>
+      <input type="checkbox" name="sourceType" id="srcSns" value="sns" checked />
+      <label for="srcSns">💬 SNS</label>
     </div>
 
     <div class="topk-wrap">
@@ -594,6 +649,31 @@
       return document.querySelector('input[name="mode"]:checked').value;
     }
 
+    const SourceIcons = { file: '📄', news: '📰', blog: '✍️', sns: '💬' };
+
+    // All boxes checked means "no filter" so results without a sourceType still show.
+    function getSourceTypes() {
+      const boxes   = [...document.querySelectorAll('input[name="sourceType"]')];
+      const checked = boxes.filter(b => b.checked).map(b => b.value);
+      return checked.length === boxes.length ? null : checked;
+    }
+
+    // Keep at least one source type selected; an empty filter would mean "search nothing".
+    document.querySelectorAll('input[name="sourceType"]').forEach(box => {
+      box.addEventListener('change', () => {
+        if (!document.querySelector('input[name="sourceType"]:checked')) box.checked = true;
+      });
+    });
+
+    function safeUrl(url) {
+      return /^https?:\/\//i.test(url || '') ? url : null;
+    }
+
+    function formatDate(epochSeconds) {
+      if (!epochSeconds) return '';
+      return new Date(epochSeconds * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
     function escHtml(s) {
       return String(s)
         .replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -688,7 +768,11 @@
                   <div class="bar-fill" style="width:${pct}%;background:${c}"></div>
                 </div>
               </div>
-              <div class="file-name">${escHtml(r.title)}</div>
+              <span class="source-badge ${escHtml(r.sourceType || 'file')}">${SourceIcons[r.sourceType] || '📄'} ${escHtml(r.sourceType || 'file')}</span>
+              <div class="file-name">${safeUrl(r.url)
+                ? `<a href="${escHtml(r.url)}" target="_blank" rel="noopener noreferrer">${escHtml(r.title)}</a>`
+                : escHtml(r.title)}</div>
+              ${r.publishedAt ? `<span class="published-at">${formatDate(r.publishedAt)}</span>` : ''}
               ${subScores}
             </div>
             <div class="card-content">${escHtml(r.content)}</div>
@@ -756,6 +840,7 @@
 
       const mode = getMode();
       const topK = parseInt(topKInput.value, 10) || 5;
+      const sourceTypes = getSourceTypes();
 
       // Lock UI
       chatInput.value = '';
@@ -770,7 +855,7 @@
         const res  = await fetch('/api/chat', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ query, mode, topK, sessionId }),
+          body:    JSON.stringify({ query, mode, topK, sessionId, ...(sourceTypes ? { sourceTypes } : {}) }),
         });
         const data = await res.json();
 

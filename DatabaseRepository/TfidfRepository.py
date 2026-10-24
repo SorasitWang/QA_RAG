@@ -8,6 +8,7 @@ can run MMR re-ranking across both vector and sparse results without an extra
 round-trip to ChromaDB.
 """
 
+import json
 import math
 import os
 import re
@@ -48,6 +49,8 @@ class TfidfRepository:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.dbPath)
         conn.row_factory = sqlite3.Row
+        # WAL lets search() read while the ingestion worker writes.
+        conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
     def _initDb(self) -> None:
@@ -83,6 +86,13 @@ class TfidfRepository:
                 CREATE INDEX IF NOT EXISTS idx_tf_term ON termFrequencies(term);
                 CREATE INDEX IF NOT EXISTS idx_docs_title ON documents(title);
             """)
+            # Migrate databases created before source types existed; old rows are local files.
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(documents)")}
+            if "sourceType" not in columns:
+                conn.execute("ALTER TABLE documents ADD COLUMN sourceType TEXT NOT NULL DEFAULT 'file'")
+            if "metadata" not in columns:
+                conn.execute("ALTER TABLE documents ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_sourceType ON documents(sourceType)")
             if conn.execute(
                 "SELECT value FROM corpusStats WHERE key = 'totalDocs'"
             ).fetchone() is None:
@@ -136,9 +146,12 @@ class TfidfRepository:
 
                 conn.execute(
                     """INSERT OR REPLACE INTO documents
-                       (id, title, content, docLength, embedding)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (doc.id, doc.metadata.get("title", ""), doc.document, len(tokens), embeddingBytes),
+                       (id, title, content, docLength, embedding, sourceType, metadata)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        doc.id, doc.metadata.get("title", ""), doc.document, len(tokens), embeddingBytes,
+                        doc.metadata.get("sourceType", "file"), json.dumps(doc.metadata),
+                    ),
                 )
                 conn.executemany(
                     "INSERT OR REPLACE INTO termFrequencies (docId, term, tf) VALUES (?, ?, ?)",
@@ -164,13 +177,52 @@ class TfidfRepository:
                 "SELECT id FROM documents WHERE title = ? LIMIT 1", (title,)
             ).fetchone() is not None
 
-    def search(self, query: str, topK: int = 15) -> RetrievalResult:
+    def deleteByTitle(self, title: str) -> int:
+        """
+        Remove every chunk of a source title and roll back its contribution to the
+        corpus statistics (per-term DF and totalDocs) so IDF stays consistent.
+        Returns the number of chunks removed.
+        """
+        with self._connect() as conn:
+            docIds: list[str] = [
+                row["id"] for row in conn.execute("SELECT id FROM documents WHERE title = ?", (title,))
+            ]
+            if not docIds:
+                return 0
+
+            placeholders = ",".join("?" * len(docIds))
+            # (docId, term) is the primary key, so COUNT(*) per term = number of
+            # deleted chunks containing that term = exact DF decrement.
+            termCounts = conn.execute(
+                f"""SELECT term, COUNT(*) AS n FROM termFrequencies
+                    WHERE docId IN ({placeholders}) GROUP BY term""",
+                docIds,
+            ).fetchall()
+            conn.executemany(
+                "UPDATE documentFrequencies SET df = df - ? WHERE term = ?",
+                [(row["n"], row["term"]) for row in termCounts],
+            )
+            conn.execute("DELETE FROM documentFrequencies WHERE df <= 0")
+            conn.execute(f"DELETE FROM termFrequencies WHERE docId IN ({placeholders})", docIds)
+            conn.execute(f"DELETE FROM documents WHERE id IN ({placeholders})", docIds)
+
+            totalDocs = int(
+                conn.execute("SELECT value FROM corpusStats WHERE key = 'totalDocs'").fetchone()["value"]
+            )
+            conn.execute(
+                "UPDATE corpusStats SET value = ? WHERE key = 'totalDocs'",
+                (str(max(0, totalDocs - len(docIds))),),
+            )
+            return len(docIds)
+
+    def search(self, query: str, topK: int = 15, sourceTypes: list[str] | None = None) -> RetrievalResult:
         """
         Score all indexed chunks against *query* using TF-IDF.
 
         Smooth IDF formula: log((N+1) / (df+1)) + 1  — avoids zero for unseen terms.
 
         distances = 1 - normalised_score  (lower = more relevant, mirrors ChromaDB L2 convention)
+        sourceTypes, when given, restricts scoring to chunks of those types (before the topK cut).
         embeddings are stored per-chunk so hybrid-mode callers can run MMR without a
         round-trip to ChromaDB.
         """
@@ -205,11 +257,15 @@ class TfidfRepository:
             }
 
             # Accumulate TF-IDF score per document for every matching (doc, term) pair
+            sql = f"SELECT docId, term, tf FROM termFrequencies WHERE term IN ({placeholders})"
+            params: list = list(queryTokens)
+            if sourceTypes:
+                typePlaceholders = ",".join("?" for _ in sourceTypes)
+                sql += f" AND docId IN (SELECT id FROM documents WHERE sourceType IN ({typePlaceholders}))"
+                params += list(sourceTypes)
+
             scores: dict[str, float] = {}
-            for row in conn.execute(
-                f"SELECT docId, term, tf FROM termFrequencies WHERE term IN ({placeholders})",
-                queryTokens,
-            ).fetchall():
+            for row in conn.execute(sql, params).fetchall():
                 scores[row["docId"]] = scores.get(row["docId"], 0.0) + row["tf"] * idfMap[row["term"]]
 
             if not scores:
@@ -226,7 +282,7 @@ class TfidfRepository:
             docMap = {
                 row["id"]: row
                 for row in conn.execute(
-                    f"SELECT id, title, content, embedding FROM documents WHERE id IN ({idPlaceholders})",
+                    f"SELECT id, title, content, embedding, sourceType, metadata FROM documents WHERE id IN ({idPlaceholders})",
                     topIds,
                 ).fetchall()
             }
@@ -244,7 +300,10 @@ class TfidfRepository:
                 resultIds.append(docId)
                 resultDocs.append(row["content"])
                 resultDistances.append(1.0 - normalizedScore)
-                resultMetadatas.append({"title": row["title"]})
+                metadata: dict = json.loads(row["metadata"] or "{}")
+                metadata.setdefault("title", row["title"])
+                metadata.setdefault("sourceType", row["sourceType"])
+                resultMetadatas.append(metadata)
                 resultEmbeddings.append(np.frombuffer(row["embedding"], dtype=np.float32).tolist())
 
             return RetrievalResult(

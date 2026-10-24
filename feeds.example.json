@@ -1,0 +1,49 @@
+[
+  {
+    "name": "bbc-business",
+    "connector": "rss",
+    "url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+    "sourceType": "news",
+    "intervalMinutes": 15,
+    "retentionDays": 14
+  },
+  {
+    "name": "nyfed-liberty-street",
+    "connector": "rss",
+    "url": "https://libertystreeteconomics.newyorkfed.org/feed/",
+    "sourceType": "blog",
+    "intervalMinutes": 60,
+    "retentionDays": 90
+  },
+  {
+    "name": "reddit-economics",
+    "connector": "reddit",
+    "subreddit": "economics",
+    "limit": 25,
+    "sourceType": "sns",
+    "intervalMinutes": 30,
+    "retentionDays": 7,
+    "enabled": false
+  },
+  {
+    "name": "mastodon-economics",
+    "connector": "mastodon",
+    "instance": "https://mastodon.social",
+    "hashtag": "economics",
+    "limit": 40,
+    "sourceType": "sns",
+    "intervalMinutes": 30,
+    "retentionDays": 7,
+    "enabled": false
+  },
+  {
+    "name": "newsapi-inflation",
+    "connector": "newsapi",
+    "query": "inflation",
+    "language": "en",
+    "sourceType": "news",
+    "intervalMinutes": 60,
+    "retentionDays": 14,
+    "enabled": false
+  }
+]

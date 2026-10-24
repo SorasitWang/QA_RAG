@@ -1,0 +1,4 @@
+# Feed poller service (feedPollerApp.py): fetches external feeds, no index or ML deps.
+flask
+requests
+feedparser

@@ -1,79 +1,78 @@
 """
-updateData ingests raw text files into the ChromaDB vector store.
-Run this script whenever new source files are added to Test/RawTextFiles.
-Already-indexed sources are skipped automatically (idempotent).
+updateData brings the indexes in line with the source folder in one pass:
+new and edited files are (re)indexed, deleted files are removed, and unchanged
+files are skipped (idempotent).
 
-Pipeline:
-  1. Load source files from disk
-  2. Get or create the ChromaDB collection
-  3. For each new source, split into overlapping chunks
-  4. Compute sentence embeddings for each chunk
-  5. Store each chunk in the vector store
+The retrieval service does this automatically on startup and while it watches
+the folder, so you only need this script when the service is not running or its
+watcher is disabled (WATCH_ENABLED=0).
+
+Usage (from the project root):
+    python -m scripts.updateData            # index locally, writing the stores directly
+    python -m scripts.updateData --remote   # ask the running retrieval service to rescan
+
+Do not run the local mode while the retrieval service is up: both would write
+the same stores at the same time.
 """
 
-###########################
-# Standard library imports
-###########################
-from sentence_transformers import SentenceTransformer
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-import chromadb
+import argparse
+import logging
 
-
-###########################
-# Local application imports
-###########################
-
-from Controller.SearchData import cleanText, fetchDataFromFolder
-from Controller.CategoryTagger import precomputeLabelEmbeddings, assignTags
-from DatabaseRepository.TfidfRepository import TfidfRepository
-from DatabaseRepository.VectorRepository import VectorRepository
-from DatabaseService.RagService import RagService
-from Dto.Source import Source
-from Categories import CATEGORY_LABELS
 from Config import Config
 
 
-def main():
+def runLocal():
+    """Reconcile the source folder against the stores in this process."""
+    import chromadb
+    from sentence_transformers import SentenceTransformer
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=Config.Model.MaxTextChunkLength,
-        chunk_overlap=Config.Model.OverLapChunkLength
+    from DatabaseRepository.GraphRepository import GraphRepository
+    from DatabaseRepository.IngestManifestRepository import IngestManifestRepository
+    from DatabaseRepository.TfidfRepository import TfidfRepository
+    from DatabaseRepository.VectorRepository import VectorRepository
+    from DatabaseService.IngestionService import IngestionService
+    from DatabaseService.RagService import RagService
+
+    client = chromadb.PersistentClient(path=Config.Ingestion.ChromaDbPath)
+    collection = client.get_or_create_collection(
+        name=Config.Ingestion.CollectionName,
+        embedding_function=Config.Model.getEmbeddingFunction(),
     )
-
-    sourceObjects: list[Source] = fetchDataFromFolder('./Test/RawTextFiles')
-
-    client = chromadb.PersistentClient(path="./embeddings_db")
-    try:
-        # Create collection on first run; get existing collection on subsequent runs
-        collection = client.create_collection(name="my_docs", embedding_function=Config.Model.EmbeddingFunction)
-    except chromadb.errors.CollectionAlreadyExistsError:
-        collection = client.get_collection(name="my_docs", embedding_function=Config.Model.EmbeddingFunction)
-
-    vectorRepo = VectorRepository(collection)
-    tfidfRepo = TfidfRepository(Config.Model.TfidfDbPath)
-    ragService = RagService(vectorRepo, tfidfRepo)
-
+    ragService = RagService(
+        VectorRepository(collection),
+        TfidfRepository(Config.Model.TfidfDbPath),
+        GraphRepository(Config.Graph.GraphDbPath),
+    )
     # Use the same model as the embedding function to keep vector space consistent
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-    labelEmbeddings = precomputeLabelEmbeddings(model, CATEGORY_LABELS)
+    model = SentenceTransformer(Config.Model.EmbeddingModel)
+    service = IngestionService(
+        ragService,
+        IngestManifestRepository(Config.Ingestion.ManifestDbPath),
+        model,
+        Config.Ingestion.SourceFolder,
+    )
+    print(service.reconcile())
 
-    for source in sourceObjects:
-        # Skip sources already in the DB to keep the script idempotent
-        if ragService.sourceExists(source.title):
-            print(f"Skipping '{source.title}' (already indexed)")
-            continue
 
-        text = cleanText(source.content)
-        chunkTextList = splitter.split_text(text)
-        sentenceEmbeddings = model.encode(chunkTextList)
+def runRemote():
+    """Trigger a rescan on the running retrieval service."""
+    from Controller.RetrievalClient import RetrievalClient
 
-        # Average chunk embeddings to represent the whole source, then tag once
-        source.tags = assignTags(sentenceEmbeddings.mean(axis=0), labelEmbeddings, CATEGORY_LABELS, Config.Model.TagTopN)
+    client = RetrievalClient()
+    client.rescan()
+    print(f"Rescan queued on {client.baseUrl}; check {client.baseUrl}/ingest/status for progress.")
 
-        for sentence, embedding in zip(chunkTextList, sentenceEmbeddings):
-            source.content = sentence
-            # ChromaDB expects plain lists, not numpy arrays
-            ragService.addSources([source], embedding.tolist())
+
+def main():
+    parser = argparse.ArgumentParser(description="Sync the source folder into the RAG indexes.")
+    parser.add_argument("--remote", action="store_true", help="ask the running retrieval service to rescan")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    if args.remote:
+        runRemote()
+    else:
+        runLocal()
 
 
 if __name__ == "__main__":

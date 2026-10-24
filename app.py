@@ -3,36 +3,31 @@ Flask web application — two-panel RAG interface.
   Left  : chat view (LLM conversation with RAG context)
   Right : debug view (retrieved documents + scores for the last turn)
 
+Retrieval is delegated to the retrieval service (retrievalApp.py) over HTTP;
+this process only holds chat sessions and talks to Ollama.
+
 Run:
+    python3 retrievalApp.py   (in another terminal)
     python3 app.py
 Then open http://localhost:5000 in a browser.
 """
 
 import os
 
-import chromadb
 from flask import Flask, jsonify, render_template, request
 
 from Config import Config
 from Controller.LLMController import LLMController
-from DatabaseRepository.TfidfRepository import TfidfRepository
-from DatabaseRepository.VectorRepository import VectorRepository
-from DatabaseService.RagService import RagService
+from Controller.RequestValidation import validateSearchRequest, validateSourceTypes
+from Controller.RetrievalClient import RetrievalClient
 from Dto.RetrievalResult import RetrievalResult
 
 app = Flask(__name__, template_folder="View/templates", static_folder="View/static")
 
 # ---------------------------------------------------------------------------
-# Shared retrieval infrastructure (initialised once at startup)
+# Retrieval service client (indexes live in the retrieval service)
 # ---------------------------------------------------------------------------
-_client     = chromadb.PersistentClient(path="./embeddings_db")
-_collection = _client.get_collection(
-    name="my_docs",
-    embedding_function=Config.Model.EmbeddingFunction,
-)
-_vectorRepo = VectorRepository(_collection)
-_tfidfRepo  = TfidfRepository(Config.Model.TfidfDbPath)
-_ragService = RagService(_vectorRepo, _tfidfRepo)
+_retrievalClient = RetrievalClient()
 
 # Per-session LLMController instances keyed by client-supplied session ID
 _sessions: dict[str, LLMController] = {}
@@ -50,8 +45,17 @@ def _formatResults(result: RetrievalResult, mode: str) -> list[dict]:
     ):
         sim = (1.0 - dist / 2.0) if mode == "vector" else (1.0 - dist)
         sim = round(max(0.0, min(1.0, sim)), 4)
-        title = os.path.basename(meta.get("title") or docId)
-        entry: dict = {"rank": i + 1, "score": sim, "title": title, "content": doc}
+        # Feed items are keyed by URL, so show their headline instead of the URL's last segment.
+        title = meta.get("headline") or os.path.basename(meta.get("title") or docId)
+        entry: dict = {
+            "rank":        i + 1,
+            "score":       sim,
+            "title":       title,
+            "content":     doc,
+            "sourceType":  meta.get("sourceType", "file"),
+            "url":         meta.get("url"),
+            "publishedAt": meta.get("publishedAt"),
+        }
 
         if result.vectorDistances is not None:
             vd = result.vectorDistances[i]
@@ -63,26 +67,6 @@ def _formatResults(result: RetrievalResult, mode: str) -> list[dict]:
         output.append(entry)
 
     return output
-
-
-def _validateRequest(body: dict) -> tuple[str, str, int, str | None]:
-    """Extract and validate common fields. Returns (query, mode, topK, error)."""
-    query = (body.get("query") or "").strip()
-    mode  = body.get("mode", "vector")
-    topK  = body.get("topK", 5)
-
-    if not query:
-        return "", "", 0, "query is required"
-    if mode not in ("vector", "sparse", "hybrid"):
-        return "", "", 0, "mode must be vector, sparse, or hybrid"
-    try:
-        topK = int(topK)
-        if not (1 <= topK <= 50):
-            raise ValueError
-    except (ValueError, TypeError):
-        return "", "", 0, "topK must be an integer between 1 and 50"
-
-    return query, mode, topK, None
 
 
 # ---------------------------------------------------------------------------
@@ -99,15 +83,17 @@ def search():
     """
     Stand-alone document search (right panel can also call this directly).
 
-    POST body  : {query, mode?, topK?}
+    POST body  : {query, mode?, topK?, sourceTypes?}
     Response   : {query, mode, results: [{rank, score, title, content}]}
     """
     body = request.get_json(silent=True) or {}
-    query, mode, topK, err = _validateRequest(body)
+    query, mode, topK, err = validateSearchRequest(body)
+    if not err:
+        sourceTypes, err = validateSourceTypes(body)
     if err:
         return jsonify({"error": err}), 400
 
-    retrieved: RetrievalResult = _ragService.query(query, topK=topK, searchMode=mode)
+    retrieved: RetrievalResult = _retrievalClient.query(query, topK=topK, searchMode=mode, sourceTypes=sourceTypes)
     results = _formatResults(retrieved, mode)
     return jsonify({"query": query, "mode": mode, "results": results})
 
@@ -121,8 +107,9 @@ def chatEndpoint():
         sessionId : str  — client-generated ID; a new LLMController is created
                           on first use and reused for the life of the session.
         query     : str  — user message
-        mode      : str  — 'vector' | 'sparse' | 'hybrid'
+        mode      : str  — 'vector' | 'sparse' | 'hybrid' | 'graph'
         topK      : int  — number of chunks to retrieve
+        sourceTypes : list[str]? — restrict to 'file' | 'news' | 'blog' | 'sns' 
 
     Response:
         reply   : str              — LLM response text
@@ -131,7 +118,9 @@ def chatEndpoint():
         mode    : str
     """
     body = request.get_json(silent=True) or {}
-    query, mode, topK, err = _validateRequest(body)
+    query, mode, topK, err = validateSearchRequest(body)
+    if not err:
+        sourceTypes, err = validateSourceTypes(body)
     if err:
         return jsonify({"error": err}), 400
 
@@ -141,7 +130,7 @@ def chatEndpoint():
         _sessions[sessionId] = LLMController()
     controller = _sessions[sessionId]
 
-    retrieved: RetrievalResult = _ragService.query(query, topK=topK, searchMode=mode)
+    retrieved: RetrievalResult = _retrievalClient.query(query, topK=topK, searchMode=mode, sourceTypes=sourceTypes)
 
     # Fallback: no chunks on the first try — rewrite using history and retry once.
     rewrittenQuery: str | None = None
@@ -149,7 +138,7 @@ def chatEndpoint():
         candidate = controller.rewriteQuery(query)
         if candidate.strip() and candidate.strip() != query:
             rewrittenQuery = candidate.strip()
-            retrieved = _ragService.query(rewrittenQuery, topK=topK, searchMode=mode)
+            retrieved = _retrievalClient.query(rewrittenQuery, topK=topK, searchMode=mode, sourceTypes=sourceTypes)
 
     results  = _formatResults(retrieved, mode)
     reply    = controller.generateResponse(query, retrieved.documents, retrieved.distances)
@@ -182,4 +171,4 @@ def chatReset():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(host="0.0.0.0", debug=True, port=Config.Services.WebPort)

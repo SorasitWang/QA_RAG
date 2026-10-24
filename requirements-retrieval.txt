@@ -1,0 +1,10 @@
+# Retrieval service (retrievalApp.py): indexes, embeddings, ingestion and folder watcher.
+flask
+chromadb
+sentence-transformers
+langchain-text-splitters
+spacy
+networkx
+numpy
+watchdog
+# After installing, run once: python -m spacy download en_core_web_sm

@@ -1,5 +1,13 @@
+# Union of requirements-web.txt, requirements-retrieval.txt and requirements-poller.txt for local dev and CI.
 flask
+requests
 chromadb
 sentence-transformers
 langchain-text-splitters
 ollama
+spacy
+networkx
+numpy
+watchdog
+feedparser
+# After installing, run once: python -m spacy download en_core_web_sm

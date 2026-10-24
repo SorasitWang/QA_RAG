@@ -69,12 +69,25 @@ class TestAddSources(unittest.TestCase):
         self.service.addSources([source], [0.1, 0.2])
         self.mock_repo.insert.assert_called_once()
 
-    def test_document_metadata_contains_title_and_type(self):
-        source = Source("myTitle", "text", "content", [])
+    def test_document_metadata_contains_title_and_source_type(self):
+        source = Source("myTitle", "news", "content", [])
         self.service.addSources([source], [0.1])
         inserted_doc = self.mock_repo.insert.call_args[0][0][0]
         self.assertEqual(inserted_doc.metadata['title'], "myTitle")
-        self.assertEqual(inserted_doc.metadata['type'],  "text")
+        self.assertEqual(inserted_doc.metadata['sourceType'], "news")
+
+    def test_legacy_text_type_is_stored_as_file(self):
+        self.service.addSources([Source("t", "text", "content", [])], [0.1])
+        inserted_doc = self.mock_repo.insert.call_args[0][0][0]
+        self.assertEqual(inserted_doc.metadata['sourceType'], "file")
+
+    def test_optional_metadata_drops_none_values(self):
+        source = Source("t", "news", "c", [], {"url": "https://x", "author": None, "publishedAt": 1700000000})
+        self.service.addSources([source], [0.1])
+        meta = self.mock_repo.insert.call_args[0][0][0].metadata
+        self.assertEqual(meta["url"], "https://x")
+        self.assertEqual(meta["publishedAt"], 1700000000)
+        self.assertNotIn("author", meta)
 
     def test_multiple_sources_all_inserted(self):
         sources = [Source(f"t{i}", "text", "c", []) for i in range(3)]

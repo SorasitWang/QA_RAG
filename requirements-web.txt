@@ -1,0 +1,4 @@
+# Web service (app.py): UI, chat sessions, Ollama client. No ML or vector-store deps.
+flask
+requests
+ollama

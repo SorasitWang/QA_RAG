@@ -97,7 +97,7 @@ def main():
     client = chromadb.PersistentClient(path="./embeddings_db")
     collection = client.get_collection(
         name="my_docs",
-        embedding_function=Config.Model.EmbeddingFunction,
+        embedding_function=Config.Model.getEmbeddingFunction(),
     )
     vectorRepo = VectorRepository(collection)
     tfidfRepo  = TfidfRepository(Config.Model.TfidfDbPath)

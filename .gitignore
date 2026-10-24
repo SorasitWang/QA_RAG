@@ -7,6 +7,11 @@ Test/RawTextFiles/*
 # DB
 tfidf_db/*
 embeddings_db/*
+graph_db/*
+feed_db/*
+
+# Local feed list (feeds.example.json is the tracked template)
+feeds.json
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/

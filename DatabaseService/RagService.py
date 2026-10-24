@@ -18,19 +18,50 @@ MMR (Maximal Marginal Relevance) prevents feeding the LLM redundant chunks
 about the same sub-topic. Lambda balances relevance vs. diversity; lower λ → more diverse.
 """
 
+import json
+
 import numpy as np
 
 from Config import Config
+from DatabaseRepository.GraphRepository import GraphRepository
 from DatabaseRepository.TfidfRepository import TfidfRepository
 from DatabaseRepository.VectorRepository import RagRepository
 from DatabaseService.BaseService import BaseService
 from Dto.RetrievalResult import RetrievalResult
-from Dto.Source import SourceType
+from Dto.Source import Source, SourceType, normaliseSourceType
 from Dto.VectorDocument import VectorDocument
 
 
 def _emptyResult() -> RetrievalResult:
     return RetrievalResult(ids=[], documents=[], distances=[], metadatas=[], embeddings=[])
+
+
+def _chunkMetadata(source: Source) -> dict:
+    """
+    Metadata stored with every chunk in every store. None values are dropped and
+    nested dicts JSON-encoded because ChromaDB only accepts scalar (or list) values.
+    """
+    metadata: dict = {'sourceType': normaliseSourceType(source.sourceType), 'title': source.title}
+    if source.tags and len(source.tags) > 0:
+        metadata['tags'] = source.tags
+    if source.optional is not None:
+        assert isinstance(source.optional, dict), "optional field must be a dictionary"
+        for key, value in source.optional.items():
+            if value is None:
+                continue
+            metadata[key] = json.dumps(value) if isinstance(value, dict) else value
+    return metadata
+
+
+def _keepSourceTypes(result: RetrievalResult, sourceTypes: list[str] | None) -> list[int]:
+    """Indices of chunks whose sourceType is allowed (all of them when no filter is set)."""
+    if not sourceTypes:
+        return list(range(len(result.ids)))
+    allowed = set(sourceTypes)
+    return [
+        i for i, meta in enumerate(result.metadatas)
+        if (meta or {}).get('sourceType', SourceType.File.value) in allowed
+    ]
 
 
 def _mmrSelect(
@@ -80,9 +111,15 @@ def _mmrSelect(
 class RagService(BaseService):
     """Provides high-level retrieval operations on top of the vector and sparse repositories."""
 
-    def __init__(self, repository: RagRepository, tfidfRepository: TfidfRepository | None = None):
+    def __init__(
+        self,
+        repository: RagRepository,
+        tfidfRepository: TfidfRepository | None = None,
+        graphRepository: GraphRepository | None = None,
+    ):
         self.repository: RagRepository = repository
         self.tfidfRepository: TfidfRepository | None = tfidfRepository
+        self.graphRepository: GraphRepository | None = graphRepository
 
     def addSources(self, sources: list, embeddings: list[float]):
         """
@@ -91,16 +128,10 @@ class RagService(BaseService):
         the TF-IDF store so both indexes share the same chunk IDs — a prerequisite for RRF
         in hybrid mode.
         """
-        documents: list[VectorDocument] = []
-        for source in sources:
-            metadata: dict = {'type': source.type, 'title': source.title}
-            if source.tags and len(source.tags) > 0:
-                metadata['tags'] = source.tags
-            if source.optional is not None:
-                assert isinstance(source.optional, dict), "optional field must be a dictionary"
-                metadata.update(source.optional)
-
-            documents.append(VectorDocument(source.title, source.content, embeddings, metadata))
+        documents: list[VectorDocument] = [
+            VectorDocument(source.title, source.content, embeddings, _chunkMetadata(source))
+            for source in sources
+        ]
 
         actualIds = self.repository.insert(documents)
 
@@ -113,9 +144,29 @@ class RagService(BaseService):
             ]
             self.tfidfRepository.insert(tfidfDocs)
 
+        if self.graphRepository is not None:
+            graphDocs = [
+                VectorDocument(actualId, doc.document, doc.embeddings, doc.metadata)
+                for actualId, doc in zip(actualIds, documents)
+            ]
+            self.graphRepository.insert(graphDocs)
+
     def sourceExists(self, title: str) -> bool:
         """Return True if any chunk from this source title is already indexed."""
         return self.repository.existsByTitle(title)
+
+    def deleteSource(self, title: str) -> int:
+        """
+        Remove every chunk of a source title from all configured stores, mirroring
+        addSources so the vector, TF-IDF and graph indexes keep the same chunk IDs.
+        Returns the number of chunks removed from the vector store.
+        """
+        removed: int = self.repository.deleteByTitle(title)
+        if self.tfidfRepository is not None:
+            self.tfidfRepository.deleteByTitle(title)
+        if self.graphRepository is not None:
+            self.graphRepository.deleteByTitle(title)
+        return removed
 
     # ------------------------------------------------------------------
     # Public query entry point
@@ -126,7 +177,7 @@ class RagService(BaseService):
         query: str,
         tags: list[str] | None = None,
         topK: int | None = None,
-        sourceType: SourceType | None = None,
+        sourceTypes: list[str | SourceType] | None = None,
         searchMode: str = "vector",
     ) -> RetrievalResult:
         """
@@ -136,46 +187,54 @@ class RagService(BaseService):
           'vector'  — semantic similarity via ChromaDB (default)
           'sparse'  — TF-IDF keyword search via SQLite
           'hybrid'  — Reciprocal Rank Fusion of vector + TF-IDF, then MMR
+          'graph'   — entity co-occurrence graph traversal via SQLite + NetworkX
 
-        *tags* and *sourceType* are applied as metadata filters for vector search.
-        TF-IDF search does not support metadata filters (searches full corpus).
+        *sourceTypes* (e.g. ['news', 'sns']) restricts results to those origins in every
+        mode. *tags* is applied as a metadata filter for vector search only.
 
         Falls back to 'vector' mode when tfidfRepository is not configured.
         """
         if topK is None:
             topK = Config.Model.MMRTopK
+        sourceTypes = [normaliseSourceType(t) for t in sourceTypes] if sourceTypes else None
 
         if searchMode == "sparse" and self.tfidfRepository is not None:
-            return self._querySparse(query, topK)
+            return self._querySparse(query, topK, sourceTypes)
 
         if searchMode == "hybrid" and self.tfidfRepository is not None:
-            return self._queryHybrid(query, tags, topK, sourceType)
+            return self._queryHybrid(query, tags, topK, sourceTypes)
 
-        return self._queryVector(query, tags, topK, sourceType)
+        if searchMode == "graph" and self.graphRepository is not None:
+            return self._queryGraph(query, topK, sourceTypes)
+
+        return self._queryVector(query, tags, topK, sourceTypes)
 
     # ------------------------------------------------------------------
     # Internal retrieval implementations
     # ------------------------------------------------------------------
 
-    def _buildFilters(self, tags: list[str] | None, sourceType: SourceType | None) -> dict:
-        filters: dict = {}
+    def _buildFilters(self, tags: list[str] | None, sourceTypes: list[str] | None) -> dict:
+        """Build a ChromaDB where-clause; multiple conditions must be wrapped in $and."""
+        conditions: list[dict] = []
         if tags:
-            filters['tags'] = tags
-        if sourceType is not None:
-            filters['type'] = sourceType
-        return filters
+            conditions.append({'tags': tags})
+        if sourceTypes:
+            conditions.append({'sourceType': {'$in': list(sourceTypes)}})
+        if not conditions:
+            return {}
+        return conditions[0] if len(conditions) == 1 else {'$and': conditions}
 
     def _queryVector(
         self,
         query: str,
         tags: list[str] | None,
         topK: int,
-        sourceType: SourceType | None,
+        sourceTypes: list[str] | None,
     ) -> RetrievalResult:
         """
         Original two-stage pipeline: wide ChromaDB search → threshold filter → MMR.
         """
-        filters = self._buildFilters(tags, sourceType)
+        filters = self._buildFilters(tags, sourceTypes)
         raw: RetrievalResult = self.repository.search(query, filters, Config.Model.RetrievalTopK)
 
         if raw.isEmpty():
@@ -201,12 +260,12 @@ class RagService(BaseService):
             embeddings=[candidateEmb[i]  for i in selected],
         )
 
-    def _querySparse(self, query: str, topK: int) -> RetrievalResult:
+    def _querySparse(self, query: str, topK: int, sourceTypes: list[str] | None = None) -> RetrievalResult:
         """
         TF-IDF-only retrieval: threshold filter → MMR re-rank.
         Embeddings stored in SQLite enable MMR without an extra ChromaDB round-trip.
         """
-        raw: RetrievalResult = self.tfidfRepository.search(query, Config.Model.TfidfTopK)
+        raw: RetrievalResult = self.tfidfRepository.search(query, Config.Model.TfidfTopK, sourceTypes)
 
         if raw.isEmpty():
             return _emptyResult()
@@ -231,12 +290,70 @@ class RagService(BaseService):
             embeddings=[candidateEmb[i]  for i in selected],
         )
 
+    def _queryGraph(self, query: str, topK: int, sourceTypes: list[str] | None = None) -> RetrievalResult:
+        """
+        Graph-mode retrieval: entity matching → BFS expansion → chunk ID ranking →
+        full document fetch from VectorRepository → MMR re-rank.
+
+        Stage 1: GraphRepository.search returns ranked chunk IDs.
+        Stage 2: VectorRepository.getByIds fetches full text and embeddings for those IDs.
+        Stage 3: Rank position is normalised to [0, 1] as a distance proxy for MMR.
+        Stage 4: MMR re-ranks candidates balancing relevance and diversity.
+
+        Falls back to an empty result when no entity matches are found or ChromaDB
+        has no matching documents for the returned IDs.
+        """
+        # The source-type filter runs after the graph ranking, so widen the pool when
+        # filtering; otherwise one dominant type can fill every slot and leave nothing.
+        poolSize = Config.Graph.GraphTopK * (Config.Graph.FilteredPoolMultiplier if sourceTypes else 1)
+        candidateIds: list[str] = self.graphRepository.search(
+            query,
+            topK=poolSize,
+            hopDepth=Config.Graph.GraphHopDepth,
+        )
+        if not candidateIds:
+            return _emptyResult()
+
+        raw: RetrievalResult = self.repository.getByIds(candidateIds)
+        # The graph stores no metadata, so the source-type filter runs on the hydrated chunks.
+        keep: list[int] = _keepSourceTypes(raw, sourceTypes)
+        if not keep:
+            return _emptyResult()
+        raw = RetrievalResult(
+            ids=       [raw.ids[i]        for i in keep],
+            documents= [raw.documents[i]  for i in keep],
+            distances= [raw.distances[i]  for i in keep],
+            metadatas= [raw.metadatas[i]  for i in keep],
+            embeddings=[raw.embeddings[i] for i in keep],
+        )
+
+        # Map each chunk ID to its graph rank distance using the original candidateIds order.
+        # ChromaDB .get() does not preserve input order, so we cannot assume raw.ids[i]
+        # corresponds to candidateIds[i].
+        nCandidates = len(candidateIds)
+        rankByChunkId: dict[str, float] = {
+            chunkId: i / max(nCandidates - 1, 1)
+            for i, chunkId in enumerate(candidateIds)
+        }
+        # Chunks missing from ChromaDB (deleted since indexing) get worst rank = 1.0
+        rankDistances: list[float] = [rankByChunkId.get(chunkId, 1.0) for chunkId in raw.ids]
+
+        selected: list[int] = _mmrSelect(rankDistances, raw.embeddings, k=topK, lambda_=Config.Model.MMRLambda)
+
+        return RetrievalResult(
+            ids=       [raw.ids[i]        for i in selected],
+            documents= [raw.documents[i]  for i in selected],
+            distances= [rankDistances[i]  for i in selected],
+            metadatas= [raw.metadatas[i]  for i in selected],
+            embeddings=[raw.embeddings[i] for i in selected],
+        )
+
     def _queryHybrid(
         self,
         query: str,
         tags: list[str] | None,
         topK: int,
-        sourceType: SourceType | None,
+        sourceTypes: list[str] | None,
     ) -> RetrievalResult:
         """
         Hybrid retrieval: independent vector + TF-IDF searches fused with RRF, then MMR.
@@ -249,9 +366,9 @@ class RagService(BaseService):
         embeddings for every chunk, no additional lookups are needed.
         """
         # --- Stage 1: independent searches ---
-        filters = self._buildFilters(tags, sourceType)
+        filters = self._buildFilters(tags, sourceTypes)
         vectorRaw: RetrievalResult = self.repository.search(query, filters, Config.Model.RetrievalTopK)
-        tfidfRaw:  RetrievalResult = self.tfidfRepository.search(query, Config.Model.TfidfTopK)
+        tfidfRaw:  RetrievalResult = self.tfidfRepository.search(query, Config.Model.TfidfTopK, sourceTypes)
 
         # --- Stage 2: threshold filter on vector results ---
         vectorIds: list[str] = []
