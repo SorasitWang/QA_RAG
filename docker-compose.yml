@@ -1,0 +1,72 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      RETRIEVAL_SERVICE_URL: http://retrieval:5001
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      retrieval:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+  retrieval:
+    build:
+      context: .
+      dockerfile: docker/retrieval.Dockerfile
+    ports:
+      - "5001:5001"
+    environment:
+      SOURCE_FOLDER: ./Test/RawTextFiles
+      # Native file events do not cross a Windows/WSL bind mount; poll instead.
+      WATCH_POLLING: "1"
+    volumes:
+      # Mounted at the same relative path so stored chunk titles stay stable.
+      - ./Test/RawTextFiles:/app/Test/RawTextFiles
+      - embeddings_db:/app/embeddings_db
+      - tfidf_db:/app/tfidf_db
+      - graph_db:/app/graph_db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # Loading the embedding model can take a while on first start.
+      start_period: 60s
+
+  feed-poller:
+    build:
+      context: .
+      dockerfile: docker/poller.Dockerfile
+    ports:
+      - "5002:5002"
+    environment:
+      RETRIEVAL_SERVICE_URL: http://retrieval:5001
+      FEEDS_CONFIG: /app/config/feeds.json
+      # Only needed for the newsapi connector; set it in .env.
+      NEWSAPI_KEY: ${NEWSAPI_KEY:-}
+    volumes:
+      # Defaults to the bundled example; set FEEDS_FILE=./feeds.json to use your own list.
+      - ${FEEDS_FILE:-./feeds.example.json}:/app/config/feeds.json:ro
+      - feed_db:/app/feed_db
+    depends_on:
+      retrieval:
+        condition: service_healthy
+
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+
+volumes:
+  embeddings_db:
+  tfidf_db:
+  graph_db:
+  feed_db:
+  ollama:
